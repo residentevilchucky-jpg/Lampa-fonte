@@ -1,0 +1,262 @@
+
+(function () {
+    'use strict';
+
+    var ID = 'ptbr_livre_v2';
+    var TITLE = 'Arquivo Português';
+    var API = 'https://archive.org';
+
+    if (window[ID]) return;
+    window[ID] = true;
+
+    if (!window.Lampa || !Lampa.Api || !Lampa.Api.sources) {
+        window[ID] = false;
+        return;
+    }
+
+    var network = new Lampa.Reguest();
+
+    function request(url, callback) {
+        network.timeout(20000);
+
+        network.silent(url, function (data) {
+            if (typeof data === 'string') {
+                try {
+                    data = JSON.parse(data);
+                } catch (e) {
+                    callback(null);
+                    return;
+                }
+            }
+
+            callback(data || null);
+        }, function () {
+            callback(null);
+        });
+    }
+
+    function cleanQuery(value) {
+        return String(value || '')
+            .replace(/[+\-!(){}\[\]^"~*?:\\/]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function makeUrl(query, page) {
+        var fields = [
+            'identifier',
+            'title',
+            'year',
+            'description',
+            'date'
+        ];
+
+        var url = API + '/advancedsearch.php?q=' +
+            encodeURIComponent(query);
+
+        fields.forEach(function (field) {
+            url += '&fl[]=' + encodeURIComponent(field);
+        });
+
+        url += '&rows=24';
+        url += '&page=' + page;
+        url += '&sort[]=' + encodeURIComponent('downloads desc');
+        url += '&output=json';
+
+        return url;
+    }
+
+    function convert(item) {
+        var identifier = item.identifier || '';
+
+        return {
+            id: ID + '_' + identifier,
+            source: ID,
+            type: 'movie',
+            title: item.title || identifier,
+            original_title: item.title || identifier,
+            overview: item.description || '',
+            release_date: item.year || item.date || '',
+            year: item.year || '',
+            img: API + '/services/img/' + identifier,
+            background_image: API + '/services/img/' + identifier,
+            _identifier: identifier
+        };
+    }
+
+    function catalog(query, page, callback) {
+        page = Math.max(1, parseInt(page, 10) || 1);
+
+        var expression =
+            'mediatype:movies AND language:Portuguese';
+
+        if (query) {
+            expression += ' AND title:("' +
+                cleanQuery(query) + '")';
+        }
+
+        request(makeUrl(expression, page), function (data) {
+            var response = data && data.response;
+            var docs = response && response.docs || [];
+            var total = response && response.numFound || 0;
+
+            callback({
+                results: docs.map(convert),
+                page: page,
+                total_pages: Math.ceil(total / 24),
+                total_results: total,
+                more: total > page * 24
+            });
+        });
+    }
+
+    function main(params, callback) {
+        callback([
+            {
+                title: 'Filmes em Português',
+                url: 'portugues',
+                component: 'category_full',
+                source: ID
+            }
+        ]);
+    }
+
+    function menu(params, callback) {
+        callback([]);
+    }
+
+    function list(params, callback) {
+        params = params || {};
+
+        var query = params.query || '';
+
+        catalog(query, params.page || 1, callback);
+    }
+
+    function search(params, callback) {
+        params = params || {};
+
+        var query = cleanQuery(params.query || '');
+
+        if (!query) {
+            callback([]);
+            return;
+        }
+
+        catalog(query, 1, function (data) {
+            var groups = [];
+
+            if (data.results.length) {
+                groups.push({
+                    title: TITLE + ' - ' + query,
+                    results: data.results,
+                    page: data.page,
+                    total_pages: data.total_pages,
+                    more: data.more,
+                    source: ID,
+                    type: 'movie'
+                });
+            }
+
+            callback(groups);
+        });
+    }
+
+    function full(params, callback, error) {
+        params = params || {};
+
+        var card = params.card || {};
+        var identifier = card._identifier ||
+            String(card.id || '').replace(ID + '_', '');
+
+        if (!identifier) {
+            if (error) error();
+            else callback({});
+            return;
+        }
+
+        request(API + '/metadata/' +
+            encodeURIComponent(identifier), function (data) {
+
+            if (!data || !data.metadata) {
+                if (error) error();
+                else callback({});
+                return;
+            }
+
+            var metadata = data.metadata;
+
+            var movie = {
+                id: card.id || ID + '_' + identifier,
+                source: ID,
+                type: 'movie',
+                title: metadata.title || card.title || identifier,
+                original_title: metadata.title || card.title || identifier,
+                overview: metadata.description || card.overview || '',
+                release_date: metadata.year || card.year || '',
+                img: card.img || API + '/services/img/' + identifier,
+                background_image: card.background_image ||
+                    API + '/services/img/' + identifier,
+                _identifier: identifier
+            };
+
+            if (window.Lampa.Status) {
+                var status = new Lampa.Status(1);
+                status.onComplite = callback;
+                status.append('movie', movie);
+            } else {
+                callback({ movie: movie });
+            }
+        });
+    }
+
+    function clear() {
+        network.clear();
+    }
+
+    var SOURCE = {
+        main: main,
+        menu: menu,
+        list: list,
+        search: search,
+        full: full,
+        clear: clear
+    };
+
+    Lampa.Api.sources[ID] = SOURCE;
+
+    function registerSource() {
+        var sources = {};
+
+        if (Lampa.Params.values && Lampa.Params.values.source) {
+            sources = Object.assign({}, Lampa.Params.values.source);
+        } else {
+            ['tmdb', 'cub', 'pub', 'filmix'].forEach(function (name) {
+                if (Lampa.Api.sources[name]) {
+                    sources[name] = name.toUpperCase();
+                }
+            });
+        }
+
+        sources[ID] = TITLE;
+
+        if (Lampa.Params && Lampa.Params.select) {
+            Lampa.Params.select('source', sources, ID);
+        }
+
+        Lampa.Noty.show(
+            'Arquivo Português: fonte carregada'
+        );
+    }
+
+    if (window.appready) {
+        setTimeout(registerSource, 500);
+    } else {
+        Lampa.Listener.follow('app', function (event) {
+            if (event.type === 'ready') {
+                setTimeout(registerSource, 500);
+            }
+        });
+    }
+
+})();
