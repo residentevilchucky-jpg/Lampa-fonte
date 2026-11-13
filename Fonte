@@ -1,0 +1,126 @@
+
+(function () {
+    'use strict';
+
+    var ID = 'ptbr_livre_v1';
+    if (window[ID]) return;
+    window[ID] = true;
+
+    var API = 'https://archive.org';
+    var net = new Lampa.Reguest();
+
+    function request(url, done) {
+        net.silent(url, function (data) {
+            if (typeof data === 'string') {
+                try { data = JSON.parse(data); } catch (e) {
+                    done(null); return;
+                }
+            }
+            done(data);
+        }, function () { done(null); });
+    }
+
+    function search(params, done) {
+        var q = params.query || '';
+        var url = API + '/advancedsearch.php?q=' +
+            encodeURIComponent('mediatype:movies AND language:Portuguese AND title:(' + q + ')') +
+            '&fl[]=identifier&fl[]=title&fl[]=year&rows=20&page=' +
+            (params.page || 1) + '&output=json';
+
+        request(url, function (data) {
+            var docs = data && data.response ? data.response.docs : [];
+            done({
+                results: docs.map(function (item) {
+                    return {
+                        id: ID + '_' + item.identifier,
+                        source: ID,
+                        type: 'movie',
+                        title: item.title || item.identifier,
+                        original_title: item.title || '',
+                        year: item.year || '',
+                        img: API + '/services/img/' + item.identifier,
+                        _identifier: item.identifier
+                    };
+                }),
+                page: params.page || 1,
+                total_pages: 1
+            });
+        });
+    }
+
+    function main(params, done) {
+        done([
+            {
+                title: 'Filmes em Português',
+                url: 'portugues',
+                component: 'category_full',
+                source: ID
+            }
+        ]);
+    }
+
+    function list(params, done) {
+        search({ query: '', page: params.page || 1 }, done);
+    }
+
+    function full(params, done) {
+        var card = params.card || params;
+        var identifier = card._identifier ||
+            String(card.id || '').replace(ID + '_', '');
+
+        request(API + '/metadata/' + identifier, function (data) {
+            if (!data || !data.files) {
+                done({});
+                return;
+            }
+
+            var files = data.files.filter(function (f) {
+                return /\.mp4$/i.test(f.name || '') &&
+                    !/\.thumbs\//i.test(f.name || '');
+            });
+
+            if (!files.length) {
+                done({});
+                return;
+            }
+
+            var file = files[0];
+
+            done({
+                title: card.title,
+                id: card.id,
+                source: ID,
+                type: 'movie',
+                movie: {
+                    title: card.title,
+                    quality: 'HD',
+                    url: API + '/download/' + identifier + '/' +
+                        encodeURIComponent(file.name)
+                }
+            });
+        });
+    }
+
+    function add() {
+        if (!window.Lampa || !Lampa.Api || !Lampa.Api.sources) return;
+
+        Lampa.Api.sources[ID] = {
+            main: main,
+            menu: main,
+            list: list,
+            search: search,
+            full: full,
+            clear: function () { net.clear(); }
+        };
+
+        Lampa.Noty.show('PT-BR Livre carregada');
+    }
+
+    if (window.appready) {
+        setTimeout(add, 500);
+    } else {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') setTimeout(add, 500);
+        });
+    }
+})();
